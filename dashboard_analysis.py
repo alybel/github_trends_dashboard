@@ -7,7 +7,7 @@ Streamlit Dashboard for GitHub Trends Analysis
 
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timezone
+from datetime import datetime
 from pymongo import MongoClient
 import os
 
