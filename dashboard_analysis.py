@@ -425,7 +425,9 @@ def main():
             
             # Add star flow (total star growth) for each category
             category_star_flow = filtered_df.groupby('category')['star_growth'].sum()
-            category_stats['Star Flow'] = category_stats['Category'].map(category_star_flow)
+            # Create mapping with capitalized categories
+            category_star_flow_capitalized = {cat.capitalize() if cat else cat: value for cat, value in category_star_flow.items()}
+            category_stats['Star Flow'] = category_stats['Category'].map(category_star_flow_capitalized)
             
             # Add percentage of star flow
             total_star_flow = category_stats['Star Flow'].sum()
