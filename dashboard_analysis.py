@@ -26,12 +26,13 @@ def get_mongodb_connection():
     return db
 
 def get_latest_analysis():
-    """Retrieve the latest analysis from MongoDB."""
+    """Retrieve the latest analysis from MongoDB and merge with repository categories."""
     db = get_mongodb_connection()
     if db is None:
         return None
     
     analysis_collection = db['analysis']
+    repositories_collection = db['repositories']
     
     # Find the most recent analysis date
     latest_analysis_date = analysis_collection.find_one(
@@ -52,6 +53,19 @@ def get_latest_analysis():
     if not latest_analysis:
         st.error("No analysis data found for the latest analysis date.")
         return None
+    
+    # Get category information from repositories collection
+    repo_categories = {}
+    for repo in repositories_collection.find({}, {'full_name': 1, 'category': 1}):
+        repo_categories[repo['full_name']] = repo.get('category')
+    
+    # Merge category information into analysis data
+    for repo_analysis in latest_analysis:
+        full_name = repo_analysis.get('full_name')
+        if full_name in repo_categories:
+            repo_analysis['category'] = repo_categories[full_name]
+        else:
+            repo_analysis['category'] = None
     
     return latest_analysis
 
@@ -221,9 +235,26 @@ def main():
     # Filters
     st.subheader("🔍 Filters")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
+        # Filter by category
+        if 'category' in df.columns:
+            categories = sorted(df['category'].dropna().unique())
+            # Capitalize first letter of each category
+            categories_capitalized = [cat.capitalize() if cat else cat for cat in categories]
+            selected_categories = st.multiselect(
+                "Categories",
+                options=categories_capitalized,
+                default=categories_capitalized,
+                help="Select categories to filter by"
+            )
+            # Convert back to original case for filtering
+            selected_categories = [cat.lower() if cat else cat for cat in selected_categories]
+        else:
+            selected_categories = []
+    
+    with col2:
         # Filter by minimum growth percentage
         min_growth = st.number_input(
             "Minimum Growth %", 
@@ -233,7 +264,7 @@ def main():
             step=0.1
         )
     
-    with col2:
+    with col3:
         # Filter by minimum star growth
         min_star_growth = st.number_input(
             "Minimum Star Growth", 
@@ -243,7 +274,7 @@ def main():
             step=1
         )
     
-    with col3:
+    with col4:
         # Filter by minimum end stars
         min_end_stars = st.number_input(
             "Minimum End Stars", 
@@ -255,6 +286,10 @@ def main():
     
     # Apply filters
     filtered_df = df.copy()
+    
+    # Filter by category
+    if selected_categories and len(selected_categories) < len(categories):
+        filtered_df = filtered_df[filtered_df['category'].isin(selected_categories)]
     
     if min_growth > 0:
         filtered_df = filtered_df[filtered_df['growth_percent'] >= min_growth]
@@ -273,7 +308,7 @@ def main():
     
     # Select columns to display
     display_columns = [
-        'full_name', 'author', 'description', 'start_stars', 
+        'full_name', 'author', 'description', 'category', 'start_stars', 
         'end_stars', 'star_growth', 'growth_per_day', 'growth_percent', 'url'
     ]
     
@@ -285,6 +320,7 @@ def main():
         'full_name': 'Repository',
         'author': 'Author',
         'description': 'Description',
+        'category': 'Category',
         'start_stars': 'Start Stars',
         'end_stars': 'End Stars',
         'star_growth': 'Star Growth',
@@ -314,6 +350,11 @@ def main():
                 "Description",
                 width="large",
                 help="Repository description"
+            ),
+            "Category": st.column_config.TextColumn(
+                "Category",
+                width="small",
+                help="Repository category"
             ),
             "Start Stars": st.column_config.NumberColumn(
                 "Start Stars",
@@ -369,23 +410,105 @@ def main():
         with col4:
             avg_stars = filtered_df['end_stars'].mean()
             st.metric("Average End Stars", f"{avg_stars:.0f}")
+        
+        # Category breakdown
+        if 'category' in filtered_df.columns:
+            st.markdown("---")
+            st.subheader("📊 Category Breakdown")
+            
+            category_counts = filtered_df['category'].value_counts()
+            category_stats = pd.DataFrame({
+                'Category': [cat.capitalize() if cat else cat for cat in category_counts.index],
+                'Count': category_counts.values,
+                'Percentage': (category_counts.values / len(filtered_df) * 100).round(1)
+            })
+            
+            # Add star flow (total star growth) for each category
+            category_star_flow = filtered_df.groupby('category')['star_growth'].sum()
+            category_stats['Star Flow'] = category_stats['Category'].map(category_star_flow)
+            
+            # Add percentage of star flow
+            total_star_flow = category_stats['Star Flow'].sum()
+            category_stats['% of Star Flow'] = (category_stats['Star Flow'] / total_star_flow * 100).round(1)
+            
+            st.write("**Repositories by Category**")
+            st.dataframe(category_stats, hide_index=True)
     
     # Top performers
     st.markdown("---")
     st.subheader("🏆 Top Performers")
     
     if filtered_df is not None and not filtered_df.empty:
-        col1, col2 = st.columns(2)
+        # Category filter for top performers
+        if 'category' in filtered_df.columns:
+            top_performer_categories = st.multiselect(
+                "Categories for Top Performers Analysis",
+                options=[cat.capitalize() if cat else cat for cat in sorted(filtered_df['category'].dropna().unique())],
+                default=[cat.capitalize() if cat else cat for cat in sorted(filtered_df['category'].dropna().unique())],
+                help="Select categories to include in top performers analysis"
+            )
+            # Convert back to original case for filtering
+            top_performer_categories = [cat.lower() if cat else cat for cat in top_performer_categories]
+            
+            # Filter data for top performers
+            top_performers_df = filtered_df[filtered_df['category'].isin(top_performer_categories)]
+        else:
+            top_performers_df = filtered_df
         
-        with col1:
-            st.write("**Top 5 by Growth %**")
-            top_growth = filtered_df.nlargest(5, 'growth_percent')[['full_name', 'growth_percent', 'star_growth']]
-            st.dataframe(top_growth, hide_index=True)
-        
-        with col2:
-            st.write("**Top 5 by Star Growth**")
-            top_stars = filtered_df.nlargest(5, 'star_growth')[['full_name', 'star_growth', 'growth_percent']]
-            st.dataframe(top_stars, hide_index=True)
+        if not top_performers_df.empty:
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.write("**Top 5 by Growth %**")
+                top_growth = top_performers_df.nlargest(5, 'growth_percent')[['full_name', 'category', 'description', 'growth_percent', 'star_growth']]
+                # Capitalize category names for display
+                top_growth['category'] = top_growth['category'].apply(lambda x: x.capitalize() if x else x)
+                # Rename columns for better display
+                top_growth = top_growth.rename(columns={
+                    'full_name': 'Repository',
+                    'category': 'Category',
+                    'description': 'Description',
+                    'growth_percent': 'Growth %',
+                    'star_growth': 'Star Growth'
+                })
+                st.dataframe(
+                    top_growth, 
+                    hide_index=True,
+                    column_config={
+                        "Repository": st.column_config.TextColumn("Repository", width="medium"),
+                        "Category": st.column_config.TextColumn("Category", width="small"),
+                        "Description": st.column_config.TextColumn("Description", width="large"),
+                        "Growth %": st.column_config.NumberColumn("Growth %", format="%.2f%%", width="small"),
+                        "Star Growth": st.column_config.NumberColumn("Star Growth", format="%d", width="small")
+                    }
+                )
+            
+            with col2:
+                st.write("**Top 5 by Star Growth**")
+                top_stars = top_performers_df.nlargest(5, 'star_growth')[['full_name', 'category', 'description', 'star_growth', 'growth_percent']]
+                # Capitalize category names for display
+                top_stars['category'] = top_stars['category'].apply(lambda x: x.capitalize() if x else x)
+                # Rename columns for better display
+                top_stars = top_stars.rename(columns={
+                    'full_name': 'Repository',
+                    'category': 'Category',
+                    'description': 'Description',
+                    'star_growth': 'Star Growth',
+                    'growth_percent': 'Growth %'
+                })
+                st.dataframe(
+                    top_stars, 
+                    hide_index=True,
+                    column_config={
+                        "Repository": st.column_config.TextColumn("Repository", width="medium"),
+                        "Category": st.column_config.TextColumn("Category", width="small"),
+                        "Description": st.column_config.TextColumn("Description", width="large"),
+                        "Star Growth": st.column_config.NumberColumn("Star Growth", format="%d", width="small"),
+                        "Growth %": st.column_config.NumberColumn("Growth %", format="%.2f%%", width="small")
+                    }
+                )
+        else:
+            st.info("No repositories found in the selected categories for top performers analysis.")
 
 if __name__ == "__main__":
     main()
